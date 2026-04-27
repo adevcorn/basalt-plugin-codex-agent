@@ -7,7 +7,7 @@ use basalt_plugin_sdk::prelude::*;
 
 basalt_plugin_meta! {
     name:              "codex-agent",
-    version:           "0.1.0",
+    version:           env!("CARGO_PKG_VERSION"),
     hook_flags:        CAP_AGENT_LAUNCHER,
     provides:          "agent-launcher:codex",
     requires:          "",
@@ -258,36 +258,7 @@ fn parse_codex_line(line: &str, ps: &mut ParseState) -> Vec<AgentEvent> {
                     }]
                 }
 
-                "agent_message" => {
-                    let text = json_str(&item_raw, "text")
-                        .or_else(|| json_str(&item_raw, "content"))
-                        .unwrap_or_default();
-                    if text.is_empty() {
-                        return vec![];
-                    }
-                    let first_line = text.lines().next().unwrap_or(&text);
-                    let label: String = first_line.chars().take(80).collect();
-                    let lines: Vec<String> = text
-                        .lines()
-                        .filter(|l| !l.is_empty())
-                        .map(|l| l.to_string())
-                        .collect();
-                    let vid = format!("msg:{}", item_id);
-                    vec![
-                        AgentEvent::NewEntry {
-                            vendor_id: vid.clone(),
-                            tool: label,
-                            category: "message".into(),
-                            raw_cmd: String::new(),
-                            file_paths: vec![],
-                        },
-                        AgentEvent::CloseEntry {
-                            vendor_id: vid,
-                            exit_code: 0,
-                            output_lines: lines,
-                        },
-                    ]
-                }
+                "agent_message" => vec![],
 
                 "error" => {
                     let msg =
