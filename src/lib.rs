@@ -56,6 +56,16 @@ fn agent_metadata() -> AgentMetadata {
             "{session_id}".into(),
             "{prompt}".into(),
         ],
+        execution_tier: AgentExecutionTier::StructuredDirect,
+        workspace_capabilities: vec![
+            "speculative-edits".into(),
+            "approval-required".into(),
+            "utf8-text".into(),
+            "create".into(),
+            "delete".into(),
+            "rename".into(),
+            "materialized-copy".into(),
+        ],
     }
 }
 
@@ -66,12 +76,13 @@ fn agent_metadata() -> AgentMetadata {
 
 struct ParseState {
     open_items: Vec<String>,
+    open_message: bool,
 }
 
 impl ParseState {
     fn decode(state: &[u8]) -> Self {
         if state.len() < 2 {
-            return Self { open_items: vec![] };
+            return Self { open_items: vec![], open_message: false };
         }
         let count = u16::from_le_bytes([state[0], state[1]]) as usize;
         let mut items = Vec::with_capacity(count);
@@ -90,7 +101,8 @@ impl ParseState {
             }
             cur += klen;
         }
-        Self { open_items: items }
+        let open_message = state.get(cur).copied().unwrap_or(0) != 0;
+        Self { open_items: items, open_message }
     }
 
     fn encode(&self) -> Vec<u8> {
@@ -103,6 +115,7 @@ impl ParseState {
             out.extend_from_slice(&klen.to_le_bytes());
             out.extend_from_slice(&bytes[..klen as usize]);
         }
+        out.push(self.open_message as u8);
         out
     }
 
@@ -258,7 +271,7 @@ fn parse_codex_line(line: &str, ps: &mut ParseState) -> Vec<AgentEvent> {
                     }]
                 }
 
-                "agent_message" => vec![],
+                "agent_message" => parse_agent_message(&item_raw, ps),
 
                 "error" => {
                     let msg =
@@ -285,7 +298,10 @@ fn parse_codex_line(line: &str, ps: &mut ParseState) -> Vec<AgentEvent> {
             }
         }
 
-        "turn.completed" => vec![AgentEvent::SessionEnded { success: true }],
+        "turn.completed" => {
+            ps.open_message = false;
+            vec![AgentEvent::SessionEnded { success: true }]
+        },
 
         "thread.started" => {
             if let Some(tid) = json_str(line, "thread_id") {
@@ -297,6 +313,34 @@ fn parse_codex_line(line: &str, ps: &mut ParseState) -> Vec<AgentEvent> {
 
         _ => vec![],
     }
+}
+
+fn parse_agent_message(item_raw: &str, ps: &mut ParseState) -> Vec<AgentEvent> {
+    let text = json_str(item_raw, "content")
+        .or_else(|| json_str(item_raw, "text"))
+        .or_else(|| json_str(item_raw, "message"))
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    if text.is_empty() {
+        return vec![];
+    }
+
+    if !ps.open_message {
+        ps.open_message = true;
+        return vec![AgentEvent::NewEntry {
+            vendor_id: "codex-message".into(),
+            tool: text,
+            category: "message".into(),
+            raw_cmd: String::new(),
+            file_paths: vec![],
+        }];
+    }
+
+    vec![AgentEvent::AppendToEntry {
+        vendor_id: "codex-message".into(),
+        text,
+    }]
 }
 
 fn classify_function_call(name: &str, args_raw: &str) -> (String, String, Vec<String>) {
