@@ -66,6 +66,7 @@ fn agent_metadata() -> AgentMetadata {
             "rename".into(),
             "materialized-copy".into(),
         ],
+        protocol: AgentProtocol::Cli,
     }
 }
 
